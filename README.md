@@ -119,7 +119,6 @@ Github: @AouTzxc
 ### 📄 许可证 (License)
 本项目采用 MIT 许可证。
 ---
-```
 
 ## ☕ 支持作者 (Support)
 
