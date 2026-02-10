@@ -111,12 +111,3 @@ Project Link: https://github.com/AouTzxc/Global-mouse
 
 📄 许可证 (License)
 本项目采用 MIT 许可证。详情请参阅 LICENSE 文件。
-
-
-### 建议操作步骤：
-
-1.  在你的项目文件夹里新建一个文件叫 `README.md`。
-2.  把上面的代码粘贴进去。
-3.  在项目里新建一个文件夹叫 `screenshots`。
-4.  运行你的程序，用截图工具截一张“设置界面”保存为 `settings.png`，截一张“屏幕上的箭头”保存为 `overlay.png`，放入 `screenshots` 文件夹。
-5.  提交到 GitHub，你的项目主页就会非常漂亮了！
