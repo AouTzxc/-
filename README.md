@@ -39,8 +39,6 @@
 
 ## 📸 预览 (Screenshots)
 
-> *请在此处替换为你实际的软件截图*
-
 | 设置面板 | 实际滚动效果 (透明 UI) |
 | :---: | :---: |
 | ![Settings UI](screenshots/settings.png) | ![Overlay UI](screenshots/overlay.png) |
