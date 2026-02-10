@@ -92,15 +92,20 @@
 git clone [https://github.com/AouTzxc/Global-mouse.git](https://github.com/AouTzxc/Global-mouse.git)
 cd Global-mouse
 pip install PyQt5 pynput
+```
+
 2. 打包命令 (PyInstaller)
 Windows 打包:
 ```bash
 # 生成 .exe
 pyinstaller -F -w -i "logo.ico" --add-data "logo.ico;." --uac-admin --name "Global_Mouse_Win" autoscroll_xy_axis.py
+```
+
 macOS 打包:
 ```bash
 # 生成 .app (需准备 logo.icns)
 pyinstaller --clean --noconfirm --windowed --icon="logo.icns" --name="Global Mouse" autoscroll_mac_presets.py
+```
 
 ### 🤝 贡献与反馈
 如果你发现了 Bug，请提交 Issue。
