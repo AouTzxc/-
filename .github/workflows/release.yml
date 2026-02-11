@@ -12,7 +12,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        # 将 macos-latest 改为 macos-13 (Intel 架构)
+        # ubuntu-latest 和 windows-latest 保持不变
+        os: [windows-latest, macos-13, ubuntu-latest]
 
     steps:
       - name: 检出代码 (Checkout Code)
@@ -40,21 +42,20 @@ jobs:
 
       # --- macOS 构建 (DMG) ---
       - name: 构建 macOS 版本
-        if: matrix.os == 'macos-latest'
+        if: matrix.os == 'macos-13'
         run: |
-          # 1. 使用 --macos-universal 构建通用版本（兼容 Intel 和 Apple 芯片）
+          # 1. 正常的 Nuitka 构建 (去掉了报错的 --macos-universal)
           uv run python -m nuitka \
             --assume-yes-for-downloads \
             --standalone \
             --macos-create-app-bundle \
-            --macos-universal \
             --enable-plugin=pyside6 \
             --macos-app-icon=logo.icns \
             --macos-app-name="Global Mouse" \
             --output-dir=build_out \
             main.py
           
-          # 2. 重命名
+          # 2. 手动重命名
           mv build_out/main.app "build_out/Global Mouse.app"
           
           # 3. 安装工具并打包
