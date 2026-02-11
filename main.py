@@ -6,16 +6,16 @@ import threading
 import json
 import platform
 import subprocess
-from pynput import mouse
+from pynput import mouse, keyboard
 
 # --- PySide6 导入 ---
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QFrame, QSlider, QDoubleSpinBox, 
-                             QPushButton, QDialog, QGraphicsDropShadowEffect, 
-                             QGridLayout, QCheckBox, QSystemTrayIcon, QMenu, 
-                             QMessageBox, QComboBox, QInputDialog, QTextEdit)
+                             QPushButton, QDialog, QGridLayout, QCheckBox, 
+                             QSystemTrayIcon, QMenu, QMessageBox, QComboBox, 
+                             QInputDialog, QTextEdit, QKeySequenceEdit)
 from PySide6.QtCore import Qt, Signal, QObject, QTimer
-from PySide6.QtGui import QColor, QPainter, QPen, QFont, QPainterPath, QIcon, QCursor, QAction
+from PySide6.QtGui import QColor, QPainter, QPen, QFont, QPainterPath, QIcon, QCursor, QAction, QKeySequence
 
 # --- 跨平台特定的库 ---
 OS_NAME = platform.system()
@@ -98,12 +98,12 @@ class GlobalConfig:
     enable_horizontal = True
     start_minimized = False
     
-    # [新增] 高级过滤规则
-    filter_mode = 0  # 0: 禁用过滤 (全局生效), 1: 黑名单模式, 2: 白名单模式
-    filter_list = [] # 存储关键词的列表
-    disable_fullscreen = False # 是否在全屏应用中禁用
+    horizontal_hotkey = ""  # [新增] 存储录制的快捷键字符串
     
-    # 运行时状态
+    filter_mode = 0  
+    filter_list = [] 
+    disable_fullscreen = False 
+    
     active = False
     origin_pos = (0, 0)
     current_window_name = ""
@@ -114,6 +114,7 @@ class GlobalConfig:
             "sensitivity": self.sensitivity, "speed_factor": self.speed_factor,
             "dead_zone": self.dead_zone, "overlay_size": self.overlay_size,
             "enable_horizontal": self.enable_horizontal, "start_minimized": self.start_minimized,
+            "horizontal_hotkey": self.horizontal_hotkey, # 保存快捷键
             "filter_mode": self.filter_mode, "filter_list": self.filter_list,
             "disable_fullscreen": self.disable_fullscreen
         }
@@ -125,6 +126,7 @@ class GlobalConfig:
         self.overlay_size = data.get("overlay_size", 60.0)
         self.enable_horizontal = data.get("enable_horizontal", True)
         self.start_minimized = data.get("start_minimized", False)
+        self.horizontal_hotkey = data.get("horizontal_hotkey", "") # 读取快捷键
         self.filter_mode = data.get("filter_mode", 0)
         self.filter_list = data.get("filter_list", [])
         self.disable_fullscreen = data.get("disable_fullscreen", False)
@@ -132,7 +134,65 @@ class GlobalConfig:
 cfg = GlobalConfig()
 mouse_controller = mouse.Controller()
 
-# --- [新增] 系统底层窗口侦听器 ---
+# --- [新增] 全局键盘监听器 ---
+class KeyboardManager:
+    def __init__(self, bridge_callback):
+        self.listener = keyboard.Listener(on_press=self.on_press, on_release=self.on_release)
+        self.current_keys = set()
+        self.bridge_callback = bridge_callback
+        # 兼容 Qt 快捷键字符串和 pynput 按键名的映射
+        self.qt_to_pynput = {
+            'pgup': 'page_up', 'pgdown': 'page_down', 'ins': 'insert',
+            'del': 'delete', 'esc': 'esc', 'return': 'enter'
+        }
+
+    def start(self):
+        self.listener.start()
+
+    def _get_key_name(self, key):
+        if isinstance(key, keyboard.KeyCode):
+            return key.char.lower() if key.char else None
+        elif isinstance(key, keyboard.Key):
+            return key.name
+        return None
+
+    def on_press(self, key):
+        key_name = self._get_key_name(key)
+        if key_name:
+            if 'ctrl' in key_name: key_name = 'ctrl'
+            elif 'alt' in key_name: key_name = 'alt'
+            elif 'shift' in key_name: key_name = 'shift'
+            elif 'cmd' in key_name: key_name = 'meta'
+            
+            self.current_keys.add(key_name)
+            self.check_hotkey()
+
+    def on_release(self, key):
+        key_name = self._get_key_name(key)
+        if key_name:
+            if 'ctrl' in key_name: key_name = 'ctrl'
+            elif 'alt' in key_name: key_name = 'alt'
+            elif 'shift' in key_name: key_name = 'shift'
+            elif 'cmd' in key_name: key_name = 'meta'
+            
+            if key_name in self.current_keys:
+                self.current_keys.remove(key_name)
+
+    def check_hotkey(self):
+        if not cfg.horizontal_hotkey:
+            return
+        
+        # 将 Qt 保存的 "Ctrl+H" 解析并映射为 pynput 格式
+        qt_keys = cfg.horizontal_hotkey.lower().split('+')
+        target_keys = set()
+        for k in qt_keys:
+            k = self.qt_to_pynput.get(k, k)
+            target_keys.add(k)
+            
+        if self.current_keys == target_keys:
+            self.bridge_callback()
+
+# --- 窗口侦听器 ---
 class WindowMonitor(threading.Thread):
     def __init__(self):
         super().__init__(daemon=True)
@@ -140,7 +200,6 @@ class WindowMonitor(threading.Thread):
         self.screen_height = 0
 
     def run(self):
-        # 延迟获取屏幕分辨率，确保 Qt 已经初始化完毕
         time.sleep(2)
         try:
             screen_geom = QApplication.primaryScreen().geometry()
@@ -154,31 +213,21 @@ class WindowMonitor(threading.Thread):
                     user32 = ctypes.windll.user32
                     hwnd = user32.GetForegroundWindow()
                     if hwnd:
-                        # 获取窗口标题
                         length = user32.GetWindowTextLengthW(hwnd)
                         buf = ctypes.create_unicode_buffer(length + 1)
                         user32.GetWindowTextW(hwnd, buf, length + 1)
                         cfg.current_window_name = buf.value
-                        
-                        # 检查是否全屏 (判断窗口尺寸是否与屏幕分辨率一致)
                         rect = wintypes.RECT()
                         user32.GetWindowRect(hwnd, ctypes.byref(rect))
                         w = rect.right - rect.left
                         h = rect.bottom - rect.top
-                        
-                        # 容差判断，游戏全屏时尺寸通常略大于或等于屏幕分辨率
                         cfg.is_fullscreen = (w >= self.screen_width and h >= self.screen_height)
                 
                 elif OS_NAME == "Darwin":
-                    # Mac 获取最前端应用名称
                     script = 'tell application "System Events" to get name of first application process whose frontmost is true'
                     res = subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
                     cfg.current_window_name = res.stdout.strip()
-                    
-                    # Mac 全屏检测较复杂，通过检查主屏幕是否被占据 (简易替代方案)
-                    # 考虑到 Mac 的全屏机制 (Spaces)，此处仅作名称检测辅助
                     cfg.is_fullscreen = False 
-                    
             except Exception as e:
                 pass
             time.sleep(0.5)
@@ -190,6 +239,7 @@ class LogicBridge(QObject):
     update_direction = Signal(str)
     update_size = Signal(int)
     preview_size = Signal()
+    toggle_horizontal = Signal() # [新增] 用于跨线程触发横向滚动开关
 
 # --- 悬浮图标 ---
 class ResizableOverlay(QWidget):
@@ -245,7 +295,7 @@ class ResizableOverlay(QWidget):
         elif self.direction == 'left': draw_arrow(p, 270, True)
         elif self.direction == 'right': draw_arrow(p, 90, True)
 
-# --- [新增] 高级规则设置窗口 ---
+# --- 高级规则设置窗口 ---
 class AdvancedSettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -261,7 +311,6 @@ class AdvancedSettingsDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20); layout.setSpacing(15)
         
-        # 全屏检测开关
         self.chk_fullscreen = QCheckBox("🎮 智能防误触：在所有全屏程序中自动禁用")
         self.chk_fullscreen.setChecked(cfg.disable_fullscreen)
         self.chk_fullscreen.setStyleSheet("font-weight: bold; color: #D32F2F;")
@@ -270,20 +319,17 @@ class AdvancedSettingsDialog(QDialog):
         line = QFrame(); line.setFrameShape(QFrame.HLine); line.setStyleSheet("color: #DDD;")
         layout.addWidget(line)
         
-        # 模式选择
         layout.addWidget(QLabel("<b>应用过滤模式：</b>"))
         self.combo_mode = QComboBox()
         self.combo_mode.addItems(["全局生效 (不进行过滤)", "黑名单模式 (在以下程序中禁用)", "白名单模式 (仅在以下程序中启用)"])
         self.combo_mode.setCurrentIndex(cfg.filter_mode)
         layout.addWidget(self.combo_mode)
         
-        # 关键词文本框
         layout.addWidget(QLabel("<b>输入应用名称关键词 (每行一个)：</b>\n(例如输入 'League' 或 'AutoCAD')"))
         self.text_edit = QTextEdit()
         self.text_edit.setPlainText("\n".join(cfg.filter_list))
         layout.addWidget(self.text_edit)
         
-        # 底部按钮
         btn_layout = QHBoxLayout()
         btn_save = QPushButton("保存规则")
         btn_save.setCursor(Qt.PointingHandCursor)
@@ -295,13 +341,18 @@ class AdvancedSettingsDialog(QDialog):
     def save_and_close(self):
         cfg.disable_fullscreen = self.chk_fullscreen.isChecked()
         cfg.filter_mode = self.combo_mode.currentIndex()
-        # 清理空行
         lines = self.text_edit.toPlainText().split('\n')
         cfg.filter_list = [line.strip() for line in lines if line.strip()]
-        
-        # 触发主窗口保存配置
         self.accept()
-
+# --- [新增] 自定义快捷键输入框 ---
+class HotkeyEdit(QKeySequenceEdit):
+    def keyPressEvent(self, event):
+        # 拦截：如果单纯按下了退格键 (Backspace) 或删除键 (Delete)
+        if event.key() in (Qt.Key_Backspace, Qt.Key_Delete) and event.modifiers() == Qt.NoModifier:
+            self.clear() # 直接清空框里的内容
+        else:
+            # 否则，按原来的规矩录制快捷键
+            super().keyPressEvent(event)
 # --- 主界面 ---
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -330,6 +381,9 @@ class MainWindow(QMainWindow):
         self.bridge.update_size.connect(self.overlay.update_geometry)
         self.bridge.preview_size.connect(self.overlay.show_preview)
         
+        # [新增] 连接快捷键触发横向滚动的信号
+        self.bridge.toggle_horizontal.connect(self.on_toggle_horizontal_hotkey)
+        
         self.init_ui()
         self.start_threads()
 
@@ -354,8 +408,6 @@ class MainWindow(QMainWindow):
 
     def init_system_tray(self, icon_name):
         self.tray_icon = QSystemTrayIcon(self)
-        
-        # 修复点：安全地加载图标，并在失败时使用正确的 QStyle 枚举
         icon_path = resource_path(icon_name)
         if os.path.exists(icon_path):
             self.tray_icon.setIcon(QIcon(icon_path))
@@ -414,16 +466,12 @@ class MainWindow(QMainWindow):
             spin = QDoubleSpinBox()
             spin.setRange(min_v, max_v); spin.setValue(val); spin.setDecimals(decimals)
             spin.setSingleStep(1.0 / (10 ** decimals))
-            # [修改点1] 移除固定宽度，改用自适应最小宽度，彻底消灭挤压乱码
-            spin.setMinimumWidth(80)
-            # [修改点2] 移除强制右侧 padding，使用极简样式
-            spin.setStyleSheet("QDoubleSpinBox { color: #000; background-color: #FFF; border: 1px solid #C0C0C0; border-radius: 6px; padding: 2px; }")
+            spin.setMinimumWidth(100) # [保留的高清修复]
             spin.valueChanged.connect(callback); spin.setFocusPolicy(Qt.ClickFocus)
 
             scale = 10 ** decimals
             slider = QSlider(Qt.Horizontal)
             slider.setRange(int(min_v * scale), int(max_v * scale)); slider.setValue(int(val * scale))
-            # [修改点3] 直接移除容易在高分屏崩溃的 Slider 自定义样式，使用 Windows 原生的高清防锯齿样式
             slider.valueChanged.connect(lambda v: spin.setValue(v / scale))
             spin.valueChanged.connect(lambda v: slider.setValue(int(v * scale)))
             slider.setFocusPolicy(Qt.NoFocus)
@@ -436,11 +484,31 @@ class MainWindow(QMainWindow):
         add_row("dead_zone", 2, "中心死区", cfg.dead_zone, 0.0, 100.0, lambda v: setattr(cfg, 'dead_zone', v), decimals=1)
         add_row("overlay_size", 3, "UI 大小", cfg.overlay_size, 30, 150, lambda v: (setattr(cfg, 'overlay_size', v), self.bridge.update_size.emit(int(v)), self.bridge.preview_size.emit()), decimals=0)
 
+        # [新增] 水平布局：Checkbox 和 QKeySequenceEdit (录制快捷键)
+        horiz_layout = QHBoxLayout()
         chk_horiz = QCheckBox("启用横向滚动")
         chk_horiz.setChecked(cfg.enable_horizontal)
         chk_horiz.toggled.connect(lambda v: setattr(cfg, 'enable_horizontal', v))
-        chk_horiz.setFocusPolicy(Qt.NoFocus); grid.addWidget(chk_horiz, 4, 0, 1, 3)
+        chk_horiz.setFocusPolicy(Qt.NoFocus)
         self.ui_widgets["enable_horizontal"] = chk_horiz
+        
+        lbl_hotkey = QLabel("快捷键:")
+        lbl_hotkey.setStyleSheet("color: #666; font-size: 12px; margin-left: 10px;")
+        
+        self.hotkey_edit = HotkeyEdit() # [修改点] 换成我们自定义的聪明输入框
+        self.hotkey_edit.setKeySequence(QKeySequence(cfg.horizontal_hotkey))
+        # [核心修复] 限制快捷键最大长度为 1！按下一个组合瞬间锁定，绝不录制连招！
+        self.hotkey_edit.setMaximumSequenceLength(1)
+        self.hotkey_edit.setToolTip("点击输入框，直接按下你要的快捷键 (按退格键清除)")
+        self.hotkey_edit.setStyleSheet("QKeySequenceEdit { border: 1px solid #CCC; border-radius: 4px; padding: 2px; background: #FFF; color: #000; min-width: 80px; }")
+        self.hotkey_edit.keySequenceChanged.connect(lambda seq: setattr(cfg, 'horizontal_hotkey', seq.toString()))
+        self.ui_widgets["hotkey_edit"] = self.hotkey_edit
+        
+        horiz_layout.addWidget(chk_horiz)
+        horiz_layout.addStretch()
+        horiz_layout.addWidget(lbl_hotkey)
+        horiz_layout.addWidget(self.hotkey_edit)
+        grid.addLayout(horiz_layout, 4, 0, 1, 3)
 
         chk_autorun = QCheckBox("开机自动启动")
         chk_autorun.setChecked(self.autostart.is_autorun())
@@ -455,7 +523,6 @@ class MainWindow(QMainWindow):
 
         main_layout.addWidget(settings_panel)
         
-        # [新增] 高级规则按钮
         btn_adv = QPushButton("🚀 高级规则 (防误触/应用排除)")
         btn_adv.setCursor(Qt.PointingHandCursor)
         btn_adv.setStyleSheet("QPushButton { background-color: #E5E5EA; color: #1C1C1E; border-radius: 8px; padding: 10px; font-weight: bold; font-size: 13px; } QPushButton:hover { background-color: #D1D1D6; }")
@@ -464,7 +531,6 @@ class MainWindow(QMainWindow):
         
         main_layout.addStretch()
 
-        # 预设管理
         preset_layout = QHBoxLayout(); preset_layout.setSpacing(10)
         self.combo_presets = QComboBox()
         self.combo_presets.addItems(list(self.presets.keys())); self.combo_presets.setCurrentText(self.current_preset_name)
@@ -488,10 +554,20 @@ class MainWindow(QMainWindow):
         footer_link.setText("<a href='https://github.com/AouTzxc/Global-mouse' style='color: #8E8E93; text-decoration: none; font-weight: bold;'>By: 阿呆</a>")
         main_layout.addWidget(footer_link)
 
+    # [新增] 响应全局快捷键触发
+    def on_toggle_horizontal_hotkey(self):
+        new_state = not cfg.enable_horizontal
+        setattr(cfg, 'enable_horizontal', new_state)
+        self.ui_widgets["enable_horizontal"].setChecked(new_state)
+        # 右下角弹个泡泡提示用户
+        if self.tray_icon.isVisible():
+            state_str = "已开启 🟢" if new_state else "已关闭 🔴"
+            self.tray_icon.showMessage("横向滚动切换", f"横向滚动 {state_str}", QSystemTrayIcon.Information, 1500)
+
     def open_advanced_settings(self):
         dialog = AdvancedSettingsDialog(self)
         if dialog.exec() == QDialog.Accepted:
-            self.save_presets_to_file() # 规则保存到当前预设
+            self.save_presets_to_file()
 
     def toggle_autorun(self, checked):
         if not self.autostart.set_autorun(checked):
@@ -519,6 +595,8 @@ class MainWindow(QMainWindow):
             self.ui_widgets["dead_zone"].setValue(cfg.dead_zone); self.ui_widgets["overlay_size"].setValue(cfg.overlay_size)
             self.ui_widgets["enable_horizontal"].setChecked(cfg.enable_horizontal)
             self.ui_widgets["start_minimized"].setChecked(cfg.start_minimized)
+            # [新增] 切换预设时，更新快捷键录制框
+            self.ui_widgets["hotkey_edit"].setKeySequence(QKeySequence(cfg.horizontal_hotkey))
             self.save_presets_to_file()
 
     def on_show_overlay(self):
@@ -531,9 +609,12 @@ class MainWindow(QMainWindow):
 
     def start_threads(self):
         try:
-            # 启动窗口侦听后台进程
             self.window_monitor = WindowMonitor()
             self.window_monitor.start()
+            
+            # [新增] 启动键盘监听
+            self.key_manager = KeyboardManager(lambda: self.bridge.toggle_horizontal.emit())
+            self.key_manager.start()
             
             self.listener = mouse.Listener(on_click=self.on_click)
             self.listener.start()
@@ -541,39 +622,25 @@ class MainWindow(QMainWindow):
             self.scroller.start()
         except Exception as e: pass
 
-    # --- [核心修改] 过滤规则拦截逻辑 ---
     def is_current_app_allowed(self):
-        # 1. 检测全屏防误触
-        if cfg.disable_fullscreen and cfg.is_fullscreen:
-            return False
-            
-        # 2. 检测黑白名单
-        if cfg.filter_mode == 0:
-            return True # 全局生效
+        if cfg.disable_fullscreen and cfg.is_fullscreen: return False
+        if cfg.filter_mode == 0: return True
             
         app_name = cfg.current_window_name.lower()
-        
-        if cfg.filter_mode == 1: # 黑名单
+        if cfg.filter_mode == 1:
             for keyword in cfg.filter_list:
-                if keyword.lower() in app_name:
-                    return False
+                if keyword.lower() in app_name: return False
             return True
-            
-        elif cfg.filter_mode == 2: # 白名单
+        elif cfg.filter_mode == 2:
             for keyword in cfg.filter_list:
-                if keyword.lower() in app_name:
-                    return True
+                if keyword.lower() in app_name: return True
             return False
-            
         return True
 
     def on_click(self, x, y, button, pressed):
         if button == mouse.Button.middle:
             if pressed:
-                # 在按下中键时，立刻判断是否在许可名单内
-                if not self.is_current_app_allowed():
-                    return # 直接 return，不激活滚动，把中键事件还给系统原程序
-
+                if not self.is_current_app_allowed(): return
                 cfg.active = not cfg.active
                 if cfg.active:
                     cfg.origin_pos = (x, y)
@@ -616,15 +683,13 @@ class MainWindow(QMainWindow):
                 time.sleep(0.05)
 
 if __name__ == "__main__":
+    QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
+    app = QApplication(sys.argv)
+    
     if OS_NAME == "Windows":
         myappid = 'adai.globalmouse.app.v3' 
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 
-    # 修复点 1：必须在 QApplication 实例化之前设置缩放策略
-    QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
-    
-    # 修复点 2：实例化 App
-    app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
 
     font_name = ".AppleSystemUIFont" if OS_NAME == "Darwin" else "Segoe UI"
