@@ -407,14 +407,19 @@ class MainWindow(QMainWindow):
         
         def add_row(key, row_idx, label_text, val, min_v, max_v, callback, decimals=1):
             lbl = QLabel(label_text); grid.addWidget(lbl, row_idx, 0)
-            spin = QDoubleSpinBox(); spin.setRange(min_v, max_v); spin.setValue(val); spin.setDecimals(decimals)
-            spin.setSingleStep(1.0 / (10 ** decimals)); spin.setFixedWidth(100)
-            spin.setStyleSheet("QDoubleSpinBox { color: #000; background-color: #FFF; border: 1px solid #C0C0C0; border-radius: 6px; padding: 2px; padding-right: 25px;}")
+            spin = QDoubleSpinBox()
+            spin.setRange(min_v, max_v); spin.setValue(val); spin.setDecimals(decimals)
+            spin.setSingleStep(1.0 / (10 ** decimals))
+            # [修改点1] 移除固定宽度，改用自适应最小宽度，彻底消灭挤压乱码
+            spin.setMinimumWidth(80)
+            # [修改点2] 移除强制右侧 padding，使用极简样式
+            spin.setStyleSheet("QDoubleSpinBox { color: #000; background-color: #FFF; border: 1px solid #C0C0C0; border-radius: 6px; padding: 2px; }")
             spin.valueChanged.connect(callback); spin.setFocusPolicy(Qt.ClickFocus)
 
             scale = 10 ** decimals
-            slider = QSlider(Qt.Horizontal); slider.setRange(int(min_v * scale), int(max_v * scale)); slider.setValue(int(val * scale))
-            slider.setStyleSheet("QSlider::groove:horizontal { height: 4px; background: #E5E5EA; border-radius: 2px; } QSlider::handle:horizontal { background: #FFFFFF; border: 1px solid #D1D1D6; width: 22px; height: 22px; margin: -9px 0; border-radius: 11px; }")
+            slider = QSlider(Qt.Horizontal)
+            slider.setRange(int(min_v * scale), int(max_v * scale)); slider.setValue(int(val * scale))
+            # [修改点3] 直接移除容易在高分屏崩溃的 Slider 自定义样式，使用 Windows 原生的高清防锯齿样式
             slider.valueChanged.connect(lambda v: spin.setValue(v / scale))
             spin.valueChanged.connect(lambda v: slider.setValue(int(v * scale)))
             slider.setFocusPolicy(Qt.NoFocus)
@@ -608,10 +613,20 @@ class MainWindow(QMainWindow):
 
 if __name__ == "__main__":
     if OS_NAME == "Windows":
+        # 强制声明高分屏感知，统一 pynput 与 Qt 的物理坐标系
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2) # PROCESS_PER_MONITOR_DPI_AWARE
+        except Exception:
+            try:
+                ctypes.windll.user32.SetProcessDPIAware()
+            except Exception:
+                pass
+                
         myappid = 'adai.globalmouse.app.v3' 
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 
     app = QApplication(sys.argv)
+    app.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app.setQuitOnLastWindowClosed(False)
 
     font_name = ".AppleSystemUIFont" if OS_NAME == "Darwin" else "Segoe UI"
