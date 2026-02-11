@@ -357,10 +357,14 @@ class MainWindow(QMainWindow):
 
     def init_system_tray(self, icon_name):
         self.tray_icon = QSystemTrayIcon(self)
-        if os.path.exists(resource_path(icon_name)):
-            self.tray_icon.setIcon(QIcon(resource_path(icon_name)))
+        
+        # 修复点：安全地加载图标，并在失败时使用正确的 QStyle 枚举
+        icon_path = resource_path(icon_name)
+        if os.path.exists(icon_path):
+            self.tray_icon.setIcon(QIcon(icon_path))
         else:
-            self.tray_icon.setIcon(self.style().standardIcon(QSystemTrayIcon.Information))
+            from PySide6.QtWidgets import QStyle
+            self.tray_icon.setIcon(self.style().standardIcon(QStyle.SP_MessageBoxInformation))
 
         tray_menu = QMenu()
         action_show = QAction("显示设置", self)
