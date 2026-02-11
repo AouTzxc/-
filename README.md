@@ -71,7 +71,10 @@ uv sync
 ```bash
 uv run main.py
 
+```
+
 3. CI/CD 自动化构建
+```bash
 本项目已配置完整的 GitHub Actions 工作流。只需向主分支推送一个带有 v*.*.* 格式的 Tag，云端双平台服务器即可全自动编译打包并发布 Release！
 
 
