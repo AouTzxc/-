@@ -1,6 +1,5 @@
 name: Build and Release
 
-# 触发条件：当你推送类似 v3.0.0 的标签 (Tag) 时自动运行
 on:
   push:
     tags:
@@ -11,10 +10,9 @@ jobs:
     name: Build on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false  # [新增这一行] 关掉连坐机制，一台失败不影响另一台
+      fail-fast: false
       matrix:
-        # 同时启动一台 Windows 和一台 macOS 服务器
-        os: [windows-latest, macos-latest]
+        os: [windows-latest, macos-latest, ubuntu-latest]
 
     steps:
       - name: 检出代码 (Checkout Code)
@@ -34,34 +32,71 @@ jobs:
       - name: 安装 Nuitka
         run: uv pip install Nuitka
 
-      - name: 构建 Windows 版本 (.exe)
+      # --- Windows 构建 ---
+      - name: 构建 Windows 版本
         if: matrix.os == 'windows-latest'
         run: |
           uv run python -m nuitka --assume-yes-for-downloads --standalone --onefile --enable-plugin=pyside6 --windows-console-mode=disable --windows-icon-from-ico=logo.ico --output-dir=build_out -o Global_Mouse_Win.exe main.py
 
-      - name: 构建 macOS 版本 (.app 转 .zip)
+      # --- macOS 构建 (DMG) ---
+      - name: 构建 macOS 版本
         if: matrix.os == 'macos-latest'
         run: |
-          # 1. 添加 -o "Global Mouse" 确保生成的文件夹叫 Global Mouse.app
-          uv run python -m nuitka \
-            --assume-yes-for-downloads \
-            --standalone \
-            --macos-create-app-bundle \
-            --enable-plugin=pyside6 \
-            --macos-app-icon=logo.icns \
-            --macos-app-name="Global Mouse" \
-            --output-dir=build_out \
-            -o "Global Mouse" \
-            main.py
+          uv run python -m nuitka --assume-yes-for-downloads --standalone --macos-create-app-bundle --enable-plugin=pyside6 --macos-app-icon=logo.icns --macos-app-name="Global Mouse" --output-dir=build_out main.py
+          brew install create-dmg
+          create-dmg \
+            --volname "Global Mouse Installer" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "Global Mouse.app" 175 120 \
+            --hide-extension "Global Mouse.app" \
+            --app-drop-link 425 120 \
+            "Global_Mouse_Mac.dmg" \
+            "build_out/main.app/"
 
-          # 2. 现在 ditto 就能找到这个路径了
-          ditto -c -k --sequesterRsrc --keepParent "build_out/Global Mouse.app" Global_Mouse_Mac.zip
+      # --- Linux 构建 (AppImage) ---
+      - name: 构建 Linux 版本 (AppImage)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          # 1. 安装构建依赖
+          sudo apt-get update
+          sudo apt-get install -y libfuse2 binutils
+          
+          # 2. 使用 Nuitka 编译
+          uv run python -m nuitka --assume-yes-for-downloads --standalone --enable-plugin=pyside6 --output-dir=build_out -o Global_Mouse_Linux main.py
+          
+          # 3. 准备 AppDir 结构
+          mkdir -p AppDir/usr/bin
+          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+          cp -r build_out/Global_Mouse_Linux.dist/* AppDir/usr/bin/
+          
+          # 4. 创建必要的桌面入口文件 (Desktop File)
+          cat > AppDir/Global_Mouse.desktop <<EOF
+          [Desktop Entry]
+          Type=Application
+          Name=Global Mouse
+          Exec=Global_Mouse_Linux
+          Icon=global_mouse
+          Categories=Utility;
+          EOF
+          
+          # 5. 准备图标 (假设你有 logo.png，如果没有，脚本会尝试转换或报错)
+          # 这里建议你在仓库根目录放一张 logo.png
+          cp logo.png AppDir/global_mouse.png || cp logo.ico AppDir/global_mouse.ico
+          
+          # 6. 下载 appimagetool 并打包
+          curl -Lo appimagetool https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          ./appimagetool AppDir Global_Mouse_Linux_x86.AppImage
 
+      # --- 发布到 GitHub ---
       - name: 自动发布到 GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
           files: |
             build_out/Global_Mouse_Win.exe
-            Global_Mouse_Mac.zip
+            Global_Mouse_Mac.dmg
+            Global_Mouse_Linux_x86.AppImage
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,3 @@
+PySide6>=6.0.0
+pynput>=1.7.6
+zstandard>=0.22.0
